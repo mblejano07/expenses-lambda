@@ -1,0 +1,98 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: >
+  Invoice management serverless API with separate Lambdas per operation.
+
+Globals:
+  Function:
+    Timeout: 30
+    Runtime: python3.13
+    Tracing: Active
+    LoggingConfig:
+      LogFormat: JSON
+
+Resources:
+
+  CreateInvoiceFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: create_invoice.lambda_handler
+      CodeUri: lambda/
+      Events:
+        CreateInvoiceAPI:
+          Type: Api
+          Properties:
+            Path: /invoices
+            Method: POST
+
+  ListInvoicesFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: list_invoices.lambda_handler
+      CodeUri: lambda/
+      Events:
+        ListInvoicesAPI:
+          Type: Api
+          Properties:
+            Path: /invoices
+            Method: GET
+
+  GetInvoiceFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: get_invoice.lambda_handler
+      CodeUri: lambda/
+      Events:
+        GetInvoiceAPI:
+          Type: Api
+          Properties:
+            Path: /invoices/{reference_id}
+            Method: GET
+
+  UpdateInvoiceFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: update_invoice.lambda_handler
+      CodeUri: lambda/
+      Events:
+        UpdateInvoiceAPI:
+          Type: Api
+          Properties:
+            Path: /invoices/{reference_id}
+            Method: PUT
+
+  DeleteInvoiceFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: delete_invoice.lambda_handler
+      CodeUri: lambda/
+      Events:
+        DeleteInvoiceAPI:
+          Type: Api
+          Properties:
+            Path: /invoices/{reference_id}
+            Method: DELETE
+
+  AddItemFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: add_item.lambda_handler
+      CodeUri: lambda/
+      Events:
+        AddItemAPI:
+          Type: Api
+          Properties:
+            Path: /invoices/{reference_id}/items
+            Method: POST
+
+  DeleteItemFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: delete_item.lambda_handler
+      CodeUri: lambda/
+      Events:
+        DeleteItemAPI:
+          Type: Api
+          Properties:
+            Path: /invoices/{reference_id}/items/{item_id}
+            Method: DELETE
