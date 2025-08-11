@@ -1,15 +1,25 @@
 AWSTemplateFormatVersion: '2010-09-09'
 Transform: AWS::Serverless-2016-10-31
 Description: >
-  Invoice management serverless API with separate Lambdas per operation.
+  Invoice management serverless API with separate Lambdas per operation
+  plus WorkMail-based OTP login.
 
 Globals:
   Function:
-    Timeout: 30
+    Timeout: 50
     Runtime: python3.13
     Tracing: Active
     LoggingConfig:
       LogFormat: JSON
+    Environment:
+      Variables:
+        # === Replace in production ===
+        WORKMAIL_ORGANIZATION_ID: "local-dev"  # Prod: actual AWS WorkMail Org ID
+        OTP_TABLE_NAME: !Ref OtpTable
+        EMAIL_SOURCE: "noreply@example.com"    # Prod: verified SES email
+        JWT_SECRET: "local-secret"             # Prod: store in Secrets Manager
+        INVOICES_TABLE_NAME: !Ref InvoicesTable
+        EMPLOYEES_TABLE_NAME: !Ref EmployeesTable
 
 Resources:
 
@@ -17,97 +27,248 @@ Resources:
     Type: AWS::Serverless::Api
     Properties:
       StageName: Prod
-      BinaryMediaTypes:
-        - multipart/form-data
-        - application/octet-stream
+      DefinitionBody:
+        swagger: '2.0'
+        info:
+          title: !Ref 'AWS::StackName'
+        schemes:
+          - 'https'
+        x-amazon-apigateway-binary-media-types:
+          - 'multipart/form-data'
+          - 'application/octet-stream'
+        paths:
+          /invoices:
+            post:
+              x-amazon-apigateway-integration:
+                type: 'aws_proxy'
+                httpMethod: 'POST'
+                uri: !Sub 'arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${CreateInvoiceFunction.Arn}/invocations'
+                passthroughBehavior: 'when_no_match'
+              responses: {}
+            get:
+              x-amazon-apigateway-integration:
+                type: 'aws_proxy'
+                httpMethod: 'POST'
+                uri: !Sub 'arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${ListInvoicesFunction.Arn}/invocations'
+                passthroughBehavior: 'when_no_match'
+              responses: {}
+          /invoices/{reference_id}:
+            get:
+              parameters:
+                - name: 'reference_id'
+                  in: 'path'
+                  required: true
+                  type: 'string'
+              x-amazon-apigateway-integration:
+                type: 'aws_proxy'
+                httpMethod: 'POST'
+                uri: !Sub 'arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${GetInvoiceFunction.Arn}/invocations'
+                passthroughBehavior: 'when_no_match'
+              responses: {}
+            put:
+              parameters:
+                - name: 'reference_id'
+                  in: 'path'
+                  required: true
+                  type: 'string'
+              x-amazon-apigateway-integration:
+                type: 'aws_proxy'
+                httpMethod: 'POST'
+                uri: !Sub 'arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${UpdateInvoiceFunction.Arn}/invocations'
+                passthroughBehavior: 'when_no_match'
+              responses: {}
+            delete:
+              parameters:
+                - name: 'reference_id'
+                  in: 'path'
+                  required: true
+                  type: 'string'
+              x-amazon-apigateway-integration:
+                type: 'aws_proxy'
+                httpMethod: 'POST'
+                uri: !Sub 'arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${DeleteInvoiceFunction.Arn}/invocations'
+                passthroughBehavior: 'when_no_match'
+              responses: {}
+          /invoices/{reference_id}/items:
+            post:
+              parameters:
+                - name: 'reference_id'
+                  in: 'path'
+                  required: true
+                  type: 'string'
+              x-amazon-apigateway-integration:
+                type: 'aws_proxy'
+                httpMethod: 'POST'
+                uri: !Sub 'arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${AddItemFunction.Arn}/invocations'
+                passthroughBehavior: 'when_no_match'
+              responses: {}
+          /invoices/{reference_id}/items/{item_id}:
+            delete:
+              parameters:
+                - name: 'reference_id'
+                  in: 'path'
+                  required: true
+                  type: 'string'
+                - name: 'item_id'
+                  in: 'path'
+                  required: true
+                  type: 'string'
+              x-amazon-apigateway-integration:
+                type: 'aws_proxy'
+                httpMethod: 'POST'
+                uri: !Sub 'arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${DeleteItemFunction.Arn}/invocations'
+                passthroughBehavior: 'when_no_match'
+              responses: {}
+          /auth/request_otp:
+            post:
+              x-amazon-apigateway-integration:
+                type: 'aws_proxy'
+                httpMethod: 'POST'
+                uri: !Sub 'arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${RequestOtpFunction.Arn}/invocations'
+                passthroughBehavior: 'when_no_match'
+              responses: {}
+          /auth/verify_otp:
+            post:
+              x-amazon-apigateway-integration:
+                type: 'aws_proxy'
+                httpMethod: 'POST'
+                uri: !Sub 'arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${VerifyOtpFunction.Arn}/invocations'
+                passthroughBehavior: 'when_no_match'
+              responses: {}
+  
+  # ================= Invoice Lambdas =================
 
   CreateInvoiceFunction:
     Type: AWS::Serverless::Function
     Properties:
       Handler: create_invoice.lambda_handler
       CodeUri: lambda/
-      Events:
-        CreateInvoiceAPI:
-          Type: Api
-          Properties:
-            RestApiId: !Ref InvoiceApi
-            Path: /invoices
-            Method: POST
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref InvoicesTable
 
   ListInvoicesFunction:
     Type: AWS::Serverless::Function
     Properties:
       Handler: list_invoices.lambda_handler
       CodeUri: lambda/
-      Events:
-        ListInvoicesAPI:
-          Type: Api
-          Properties:
-            RestApiId: !Ref InvoiceApi
-            Path: /invoices
-            Method: GET
+      Policies:
+        - DynamoDBReadPolicy:
+            TableName: !Ref InvoicesTable
 
   GetInvoiceFunction:
     Type: AWS::Serverless::Function
     Properties:
       Handler: get_invoice.lambda_handler
       CodeUri: lambda/
-      Events:
-        GetInvoiceAPI:
-          Type: Api
-          Properties:
-            RestApiId: !Ref InvoiceApi
-            Path: /invoices/{reference_id}
-            Method: GET
+      Policies:
+        - DynamoDBReadPolicy:
+            TableName: !Ref InvoicesTable
 
   UpdateInvoiceFunction:
     Type: AWS::Serverless::Function
     Properties:
       Handler: update_invoice.lambda_handler
       CodeUri: lambda/
-      Events:
-        UpdateInvoiceAPI:
-          Type: Api
-          Properties:
-            RestApiId: !Ref InvoiceApi
-            Path: /invoices/{reference_id}
-            Method: PUT
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref InvoicesTable
 
   DeleteInvoiceFunction:
     Type: AWS::Serverless::Function
     Properties:
       Handler: delete_invoice.lambda_handler
       CodeUri: lambda/
-      Events:
-        DeleteInvoiceAPI:
-          Type: Api
-          Properties:
-            RestApiId: !Ref InvoiceApi
-            Path: /invoices/{reference_id}
-            Method: DELETE
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref InvoicesTable
 
   AddItemFunction:
     Type: AWS::Serverless::Function
     Properties:
       Handler: add_item.lambda_handler
       CodeUri: lambda/
-      Events:
-        AddItemAPI:
-          Type: Api
-          Properties:
-            RestApiId: !Ref InvoiceApi
-            Path: /invoices/{reference_id}/items
-            Method: POST
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref InvoicesTable
 
   DeleteItemFunction:
     Type: AWS::Serverless::Function
     Properties:
       Handler: delete_item.lambda_handler
       CodeUri: lambda/
-      Events:
-        DeleteItemAPI:
-          Type: Api
-          Properties:
-            RestApiId: !Ref InvoiceApi
-            Path: /invoices/{reference_id}/items/{item_id}
-            Method: DELETE
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref InvoicesTable
+
+  # ================= OTP Auth Lambdas =================
+
+  RequestOtpFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: request_otp.lambda_handler
+      CodeUri: lambda/
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref OtpTable
+        - SESCrudPolicy:
+            IdentityName: !Ref EmailSourceIdentity # For prod SES sending
+
+  VerifyOtpFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: verify_otp.lambda_handler
+      CodeUri: lambda/
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref OtpTable
+
+  # ================= DynamoDB for SCHEMAS =================
+  InvoicesTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: Invoices
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: reference_id
+          AttributeType: S
+      KeySchema:
+        - AttributeName: reference_id
+          KeyType: HASH
+    DeletionPolicy: Retain  # Keep table if it already exists
+
+  EmployeesTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: Employees
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: employee_id
+          AttributeType: S
+      KeySchema:
+        - AttributeName: employee_id
+          KeyType: HASH
+    DeletionPolicy: Retain  # Keep table if it already exists
+
+  OtpTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: OtpStore
+      AttributeDefinitions:
+        - AttributeName: email
+          AttributeType: S
+      KeySchema:
+        - AttributeName: email
+          KeyType: HASH
+      BillingMode: PAY_PER_REQUEST
+      TimeToLiveSpecification:
+        AttributeName: expires_at
+        Enabled: true
+      DeletionPolicy: Retain  # Keep table if it already exists
+
+  # ================= SES Identity (Prod Only) =================
+
+  EmailSourceIdentity:
+    Type: AWS::SES::EmailIdentity
+    Properties:
+      EmailIdentity: noreply@example.com # Replace in production with verified domain
