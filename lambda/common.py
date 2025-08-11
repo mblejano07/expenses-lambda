@@ -1,3 +1,4 @@
+import os
 import boto3
 import json
 from decimal import Decimal
@@ -40,7 +41,8 @@ DYNAMODB = boto3.resource(
 )
 INVOICE_TABLE = DYNAMODB.Table("Invoices")
 EMPLOYEE_TABLE = DYNAMODB.Table("Employees")
-
+# Add below your existing DynamoDB resource and table definitions
+OTP_TABLE = DYNAMODB.Table("OtpStore")
 # =========================================================
 # COGNITO CLIENT
 # =========================================================
@@ -55,6 +57,32 @@ COGNITO_IDP = boto3.client(
 # ✅ Replace with real values when deploying
 USER_POOL_ID = "your_user_pool_id"
 CLIENT_ID = "your_app_client_id"
+
+# ✅ Replace with real values when deploying
+EMAIL_SOURCE = "noreply@example.com"
+JWT_SECRET = "local-secret"
+
+# =========================================================
+# SES CLIENT
+# =========================================================
+# SES_MOCK_MODE = os.getenv("SES_MOCK_MODE", "false").lower() == "true"
+SES_MOCK_MODE = True  # Set to True for local testing, False for productionJWT_SECRET = "local-secret"
+SES_ENDPOINT_URL = os.getenv("SES_ENDPOINT_URL", None)
+
+if SES_MOCK_MODE:
+    SES = boto3.client(
+        "ses",
+        region_name=AWS_REGION,
+        endpoint_url=SES_ENDPOINT_URL or LOCALSTACK_URL,
+        aws_access_key_id="test",
+        aws_secret_access_key="test"
+    )
+else:
+    SES = boto3.client(
+        "ses",
+        region_name=AWS_REGION
+        # Uses default credentials/roles in prod
+    )
 
 # =========================================================
 # COMMON UTILS
@@ -115,6 +143,11 @@ def parse_multipart(event):
                 form_data[name_bytes.decode("utf-8")] = part.content.decode("latin-1")
 
     return form_data, file_data
+
+def is_valid_workmail_user(email):
+    with open("workmail.json") as f:
+        data = json.load(f)
+    return email.lower() in (user.lower() for user in data.get("users", []))
 
 # =========================================================
 # COGNITO UTILS
