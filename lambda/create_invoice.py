@@ -2,9 +2,12 @@ import json
 import uuid
 from io import BytesIO
 from datetime import datetime
-from common import make_response, S3, BUCKET_NAME, INVOICE_TABLE, get_employee, parse_multipart
+from common import make_response, S3, BUCKET_NAME, INVOICE_TABLE, get_employee, parse_multipart, LOCALSTACK_URL, verify_jwt_from_event
 
 def lambda_handler(event, context):
+    payload, error = verify_jwt_from_event(event)
+    if error:
+        return make_response(401, {"error": error})
     try:
         headers = event.get("headers", {})
         content_type = headers.get("Content-Type") or headers.get("content-type", "")
@@ -15,7 +18,7 @@ def lambda_handler(event, context):
                 file_obj = BytesIO(file_data["content"])
                 file_key = f"invoices/{uuid.uuid4()}_{file_data['filename']}"
                 S3.upload_fileobj(file_obj, BUCKET_NAME, file_key)
-                body["file_url"] = f"http://localhost:4566/{BUCKET_NAME}/{file_key}"
+                body["file_url"] = f"{LOCALSTACK_URL}/{BUCKET_NAME}/{file_key}"
             else:
                 body["file_url"] = "no-file-uploaded"
         elif content_type.startswith("application/json"):

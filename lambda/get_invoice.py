@@ -1,6 +1,9 @@
-from common import make_response, INVOICE_TABLE, decimal_to_float
+from common import make_response, INVOICE_TABLE, decimal_to_float,verify_jwt_from_event
 
 def lambda_handler(event, context):
+    payload, error = verify_jwt_from_event(event)
+    if error:
+        return make_response(401, {"error": error})
     try:
         reference_id = event["pathParameters"]["reference_id"]
         response = INVOICE_TABLE.get_item(Key={"reference_id": reference_id})

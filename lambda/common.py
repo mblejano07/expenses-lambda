@@ -3,6 +3,7 @@ import boto3
 import json
 from decimal import Decimal
 import base64
+import jwt
 from io import BytesIO
 from requests_toolbelt.multipart import decoder
 
@@ -149,6 +150,25 @@ def is_valid_workmail_user(email):
         data = json.load(f)
     return email.lower() in (user.lower() for user in data.get("users", []))
 
+
+# =========================================================
+# JWT CONFIGURATION
+# =========================================================
+
+def verify_jwt_from_event(event):
+    headers = event.get("headers", {})
+    auth_header = headers.get("Authorization") or headers.get("authorization")
+    if not auth_header or not auth_header.startswith("Bearer "):
+        return None, "Missing or invalid Authorization header"
+
+    token = auth_header.split(" ")[1]
+    try:
+        payload = jwt.decode(token, JWT_SECRET, algorithms=["HS256"])
+        return payload, None
+    except jwt.ExpiredSignatureError:
+        return None, "Token expired"
+    except jwt.InvalidTokenError:
+        return None, "Invalid token"
 # =========================================================
 # COGNITO UTILS
 # =========================================================
