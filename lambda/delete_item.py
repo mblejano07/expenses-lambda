@@ -1,6 +1,9 @@
-from common import make_response, INVOICE_TABLE
+from common import make_response, INVOICE_TABLE,verify_jwt_from_event
 
 def lambda_handler(event, context):
+    payload, error = verify_jwt_from_event(event)
+    if error:
+        return make_response(401, {"error": error})
     try:
         reference_id = event["pathParameters"]["reference_id"]
         item_id = event["pathParameters"]["item_id"]
