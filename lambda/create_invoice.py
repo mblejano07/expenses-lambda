@@ -2,9 +2,12 @@ import json
 import uuid
 from io import BytesIO
 from datetime import datetime
-from common import make_response, S3, BUCKET_NAME, INVOICE_TABLE, get_employee, parse_multipart, LOCALSTACK_URL
+from common import make_response, S3, BUCKET_NAME, INVOICE_TABLE, get_employee, parse_multipart, LOCALSTACK_URL, verify_jwt_from_event
 
 def lambda_handler(event, context):
+    payload, error = verify_jwt_from_event(event)
+    if error:
+        return make_response(401, {"error": error})
     try:
         headers = event.get("headers", {})
         content_type = headers.get("Content-Type") or headers.get("content-type", "")

@@ -5,8 +5,6 @@ import jwt  # you might need to add this to requirements.txt
 from common import make_response, DYNAMODB, OTP_TABLE
 from common import JWT_SECRET
 
-# OTP_TABLE = DYNAMODB.Table(os.getenv("OTP_TABLE_NAME", "OtpStore"))
-
 def lambda_handler(event, context):
     try:
         body = json.loads(event.get("body") or "{}")

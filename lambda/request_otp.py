@@ -5,7 +5,6 @@ import time
 from common import make_response, SES, INVOICE_TABLE, DYNAMODB, OTP_TABLE, SES_MOCK_MODE, EMAIL_SOURCE
 from common import is_valid_workmail_user  # from step 1
 
-# OTP_TABLE = DYNAMODB.Table(os.getenv("OTP_TABLE_NAME", "OtpStore"))
 OTP_TTL_SECONDS = 300  # OTP valid for 5 minutes
 
 def send_otp_email(email, otp_code):

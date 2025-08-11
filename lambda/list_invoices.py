@@ -1,4 +1,4 @@
-from common import make_response, INVOICE_TABLE, decimal_to_float
+from common import make_response, INVOICE_TABLE, decimal_to_float,verify_jwt_from_event
 
 def lambda_handler(event, context):
     """
@@ -9,7 +9,9 @@ def lambda_handler(event, context):
         - last_evaluated_key (optional): key from previous response for pagination
         - `last_evaluated_key` will be used by frontend to load next page
     """
-
+    payload, error = verify_jwt_from_event(event)
+    if error:
+        return make_response(401, {"error": error})
     try:
         # Parse query parameters for pagination
         limit = int(event.get("queryStringParameters", {}).get("limit", 10))
