@@ -1,47 +1,57 @@
-from common import make_response, INVOICE_TABLE, decimal_to_float,verify_jwt_from_event
+import json
+from common import format_response, INVOICE_TABLE, decimal_to_float, verify_jwt_from_event
 
 def lambda_handler(event, context):
     """
     Lambda function to fetch paginated invoice records from DynamoDB.
-    
-    Expected `event` query parameters:
+
+    Query parameters:
         - limit (optional): max number of items per page (default: 10)
-        - last_evaluated_key (optional): key from previous response for pagination
-        - `last_evaluated_key` will be used by frontend to load next page
+        - last_evaluated_key (optional): JSON-encoded key from previous page
     """
     payload, error = verify_jwt_from_event(event)
     if error:
-        return make_response(401, {"error": error})
+        return format_response(401, message=error)
+
     try:
-        # Parse query parameters for pagination
-        limit = int(event.get("queryStringParameters", {}).get("limit", 10))
-        last_key = event.get("queryStringParameters", {}).get("last_evaluated_key")
+        # Parse query parameters
+        query_params = event.get("queryStringParameters") or {}
+        try:
+            limit = int(query_params.get("limit", 10))
+        except ValueError:
+            return format_response(400, message="Invalid 'limit' parameter")
+
+        last_key_raw = query_params.get("last_evaluated_key")
 
         # Build scan parameters
         scan_kwargs = {"Limit": limit}
-        if last_key:
-            # Convert the key string back to dict
-            # In frontend, you'll send this as JSON
-            import json
-            scan_kwargs["ExclusiveStartKey"] = json.loads(last_key)
+        if last_key_raw:
+            try:
+                scan_kwargs["ExclusiveStartKey"] = json.loads(last_key_raw)
+            except json.JSONDecodeError:
+                return format_response(400, message="Invalid 'last_evaluated_key' format")
 
-        # Perform DynamoDB scan with pagination
+        # Perform scan
         response = INVOICE_TABLE.scan(**scan_kwargs)
 
-        # Convert DynamoDB Decimal types to float
         invoices = [decimal_to_float(item) for item in response.get("Items", [])]
-
-        # Prepare response payload with pagination token if available
         result = {
             "invoices": invoices,
             "last_evaluated_key": None
         }
+
         if "LastEvaluatedKey" in response:
-            import json
             result["last_evaluated_key"] = json.dumps(response["LastEvaluatedKey"])
 
-        return make_response(200, result)
+        return format_response(
+            200,
+            message="Invoices retrieved successfully",
+            data=result
+        )
 
     except Exception as e:
-        return make_response(500, {"error": str(e)})
-
+        return format_response(
+            500,
+            message="Internal Server Error",
+            errors={"exception": str(e)}
+        )

@@ -1,43 +1,57 @@
-import os
-import json
-import time
-import jwt  # you might need to add this to requirements.txt
-from common import make_response, DYNAMODB, OTP_TABLE
-from common import JWT_SECRET
+import json, time, hmac
+from common import format_response, OTP_TABLE, hash_otp, issue_tokens
 
 def lambda_handler(event, context):
     try:
         body = json.loads(event.get("body") or "{}")
-        email = body.get("email")
-        otp_code = body.get("otp_code")
+        email = (body.get("email") or "").strip().lower()
+        otp_code = (body.get("otp_code") or "").strip()
 
+        # ✅ Validation
         if not email or not otp_code:
-            return make_response(400, {"error": "Email and OTP code are required"})
+            return format_response(
+                400,
+                message="Validation Error",
+                errors={"email": "Required" if not email else None,
+                        "otp_code": "Required" if not otp_code else None}
+            )
 
-        response = OTP_TABLE.get_item(Key={"email": email})
-        item = response.get("Item")
-
+        # ✅ Fetch OTP record
+        resp = OTP_TABLE.get_item(Key={"email": email})
+        item = resp.get("Item")
         if not item:
-            return make_response(400, {"error": "OTP not found or expired"})
+            return format_response(400, message="OTP not found or expired", errors={"otp_code": "Invalid or expired"})
 
-        if int(time.time()) > item.get("expires_at", 0):
-            return make_response(400, {"error": "OTP expired"})
+        # ✅ Expiry check
+        if int(time.time()) > int(item.get("expires_at", 0)):
+            return format_response(400, message="OTP expired", errors={"otp_code": "Expired"})
 
-        if otp_code != item.get("otp_code"):
-            return make_response(400, {"error": "Invalid OTP code"})
+        # ✅ Verify hashed OTP
+        expected = hash_otp(otp_code, item["salt"])
+        if not hmac.compare_digest(expected, item["otp_hash"]):
+            return format_response(400, message="Invalid OTP code", errors={"otp_code": "Incorrect"})
 
-        # OTP is valid, generate JWT token for session
-        payload = {
-            "email": email,
-            "iat": int(time.time()),
-            "exp": int(time.time()) + 3600  # 1 hour expiry
-        }
-        token = jwt.encode(payload, JWT_SECRET, algorithm="HS256")
-
-        # Optionally: delete OTP after successful validation
+        # ✅ OTP success — delete & issue tokens
         OTP_TABLE.delete_item(Key={"email": email})
+        access_token, refresh_token, refresh_exp = issue_tokens(email)
 
-        return make_response(200, {"message": "OTP verified", "token": token})
+        headers = {
+            "Content-Type": "application/json",
+            "Set-Cookie": (
+                f"refresh_token={refresh_token}; "
+                f"HttpOnly; Path=/; Max-Age=2592000; SameSite=Lax"
+            )
+        }
+
+        return format_response(
+            200,
+            message="OTP verified successfully",
+            data={
+                "access_token": access_token,
+                "refresh_token": refresh_token,  # Also in cookie
+                "refresh_expires_at": refresh_exp
+            }
+        ) | {"headers": headers}  # ✅ Merge headers into API Gateway response
 
     except Exception as e:
-        return make_response(500, {"error": str(e)})
+        return format_response(500, message="Internal Server Error", errors={"exception": str(e)})
