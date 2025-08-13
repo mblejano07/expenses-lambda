@@ -1,11 +1,17 @@
-import os
-import json
-import random
-import time
-from common import make_response, SES, INVOICE_TABLE, DYNAMODB, OTP_TABLE, SES_MOCK_MODE, EMAIL_SOURCE
-from common import is_valid_workmail_user  # from step 1
+import json, time, random, secrets, os
+from common import (
+    format_response,  # ✅ Use standardized response helper
+    OTP_TABLE,
+    is_valid_workmail_user,
+    hash_otp,
+    SES,
+    EMAIL_SOURCE,
+    SES_MOCK_MODE,
+    OTP_MAX_ATTEMPTS,
+    OTP_WINDOW_SECONDS
+)
 
-OTP_TTL_SECONDS = 300  # OTP valid for 5 minutes
+OTP_TTL_SECONDS = 300  # 5 minutes
 
 def send_otp_email(email, otp_code):
     subject = "Your OTP Code"
@@ -16,8 +22,8 @@ def send_otp_email(email, otp_code):
             Destination={"ToAddresses": [email]},
             Message={
                 "Subject": {"Data": subject},
-                "Body": {"Text": {"Data": body_text}},
-            }
+                "Body": {"Text": {"Data": body_text}}
+            },
         )
     except Exception as e:
         print(f"Error sending email: {e}")
@@ -30,26 +36,54 @@ def generate_otp():
 def lambda_handler(event, context):
     try:
         body = json.loads(event.get("body") or "{}")
-        email = body.get("email")
+        email = (body.get("email") or "").strip().lower()
+
+        # ✅ Validation
         if not email:
-            return make_response(400, {"error": "Email is required"})
-
+            return format_response(400, message="Validation Error", errors={"email": "Email is required"})
         if not is_valid_workmail_user(email):
-            return make_response(403, {"error": "Email is not authorized"})
+            return format_response(403, message="Unauthorized Email", errors={"email": "Email is not authorized"})
 
+        # ✅ Rate-limit check
+        now = int(time.time())
+        window_start = now - OTP_WINDOW_SECONDS
+
+        existing = OTP_TABLE.get_item(Key={"email": email}).get("Item") or {}
+        attempts = int(existing.get("attempts", 0))
+        first_attempt_at = int(existing.get("first_attempt_at", now))
+
+        if first_attempt_at < window_start:
+            attempts = 0
+            first_attempt_at = now
+
+        if attempts >= OTP_MAX_ATTEMPTS:
+            return format_response(429, message="Too many OTP requests", errors={"rate_limit": "Try again later"})
+
+        # ✅ Generate OTP and hash
         otp_code = generate_otp()
-        expires_at = int(time.time()) + OTP_TTL_SECONDS
+        salt = secrets.token_hex(8)
+        otp_hash = hash_otp(otp_code, salt)
+        expires_at = now + OTP_TTL_SECONDS
 
-        OTP_TABLE.put_item(
-            Item={
-                "email": email,
-                "otp_code": otp_code,
-                "expires_at": expires_at
-            }
-        )
-     
+        item = {
+            "email": email,
+            "otp_hash": otp_hash,
+            "salt": salt,
+            "expires_at": expires_at,
+            "attempts": attempts + 1,
+            "first_attempt_at": first_attempt_at
+        }
+
+        # For local testing only
+        if os.environ.get("WORKMAIL_ORGANIZATION_ID") == "local-dev":
+            item["otp_code"] = otp_code
+
+        OTP_TABLE.put_item(Item=item)
+
+        # ✅ Send OTP
         send_otp_email(email, otp_code)
 
-        return make_response(200, {"message": "OTP sent"})
+        return format_response(200, message="OTP sent successfully", data={"email": email})
+
     except Exception as e:
-        return make_response(500, {"error": str(e)})
+        return format_response(500, message="Internal Server Error", errors={"exception": str(e)})
