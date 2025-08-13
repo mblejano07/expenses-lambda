@@ -13,16 +13,21 @@ Globals:
       LogFormat: JSON
     Environment:
       Variables:
-        # === Replace in production ===
-        WORKMAIL_ORGANIZATION_ID: "local-dev"  # Prod: actual AWS WorkMail Org ID
+        WORKMAIL_ORGANIZATION_ID: "local-dev"
         OTP_TABLE_NAME: !Ref OtpTable
-        EMAIL_SOURCE: "noreply@example.com"    # Prod: verified SES email
-        JWT_SECRET: "local-secret"             # Prod: store in Secrets Manager
+        EMAIL_SOURCE: "noreply@example.com"
+        JWT_SECRET: "local-secret"
         INVOICES_TABLE_NAME: !Ref InvoicesTable
         EMPLOYEES_TABLE_NAME: !Ref EmployeesTable
-        ACCESS_TOKEN_TTL_SECONDS: "900"        # 15 minutes
-        REFRESH_TOKEN_TTL_SECONDS: "2592000"   # 30 days
-        REFRESH_TOKEN_PEPPER: "change-me"      # store in Secrets Manager in prod
+        ACCESS_TOKEN_TTL_SECONDS: "900"
+        REFRESH_TOKEN_TTL_SECONDS: "2592000"
+        REFRESH_TOKEN_PEPPER: "change-me"
+  Api:
+    Cors:
+      AllowMethods: "'GET,POST,PUT,DELETE,OPTIONS'"
+      AllowHeaders: "'*'"
+      AllowOrigin: "'*'"
+
 
 Resources:
 

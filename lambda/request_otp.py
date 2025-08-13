@@ -1,7 +1,6 @@
-# request_otp.py
 import json, time, random, secrets, os
 from common import (
-    make_response,
+    format_response,  # ✅ Use standardized response helper
     OTP_TABLE,
     is_valid_workmail_user,
     hash_otp,
@@ -38,35 +37,34 @@ def lambda_handler(event, context):
     try:
         body = json.loads(event.get("body") or "{}")
         email = (body.get("email") or "").strip().lower()
-        if not email:
-            return make_response(400, {"error": "Email is required"})
-        if not is_valid_workmail_user(email):
-            return make_response(403, {"error": "Email is not authorized"})
 
-        # rate-limit window
+        # ✅ Validation
+        if not email:
+            return format_response(400, message="Validation Error", errors={"email": "Email is required"})
+        if not is_valid_workmail_user(email):
+            return format_response(403, message="Unauthorized Email", errors={"email": "Email is not authorized"})
+
+        # ✅ Rate-limit check
         now = int(time.time())
         window_start = now - OTP_WINDOW_SECONDS
 
-        # get current counters (if any)
         existing = OTP_TABLE.get_item(Key={"email": email}).get("Item") or {}
         attempts = int(existing.get("attempts", 0))
         first_attempt_at = int(existing.get("first_attempt_at", now))
 
         if first_attempt_at < window_start:
-            # reset window
             attempts = 0
             first_attempt_at = now
 
         if attempts >= OTP_MAX_ATTEMPTS:
-            return make_response(429, {"error": "Too many OTP requests. Try again later."})
+            return format_response(429, message="Too many OTP requests", errors={"rate_limit": "Try again later"})
 
-        # generate + hash
+        # ✅ Generate OTP and hash
         otp_code = generate_otp()
         salt = secrets.token_hex(8)
         otp_hash = hash_otp(otp_code, salt)
         expires_at = now + OTP_TTL_SECONDS
 
-        # Build the DynamoDB item
         item = {
             "email": email,
             "otp_hash": otp_hash,
@@ -76,15 +74,16 @@ def lambda_handler(event, context):
             "first_attempt_at": first_attempt_at
         }
 
-        # ✅ For local testing, store raw OTP (never in production)
+        # For local testing only
         if os.environ.get("WORKMAIL_ORGANIZATION_ID") == "local-dev":
             item["otp_code"] = otp_code
 
         OTP_TABLE.put_item(Item=item)
 
+        # ✅ Send OTP
         send_otp_email(email, otp_code)
-        return make_response(200, {"message": "OTP sent"})
+
+        return format_response(200, message="OTP sent successfully", data={"email": email})
 
     except Exception as e:
-        return make_response(500, {"error": str(e)})
-
+        return format_response(500, message="Internal Server Error", errors={"exception": str(e)})

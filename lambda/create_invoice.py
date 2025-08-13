@@ -2,12 +2,16 @@ import json
 import uuid
 from io import BytesIO
 from datetime import datetime
-from common import make_response, S3, BUCKET_NAME, INVOICE_TABLE, get_employee, parse_multipart, LOCALSTACK_URL, verify_jwt_from_event
+from common import (
+    make_response, S3, BUCKET_NAME, INVOICE_TABLE, get_employee,
+    parse_multipart, LOCALSTACK_URL, verify_jwt_from_event, format_response
+)
 
 def lambda_handler(event, context):
     payload, error = verify_jwt_from_event(event)
     if error:
-        return make_response(401, {"error": error})
+        return format_response(401, message="Unauthorized", errors={"auth": error})
+
     try:
         headers = event.get("headers", {})
         content_type = headers.get("Content-Type") or headers.get("content-type", "")
@@ -25,16 +29,17 @@ def lambda_handler(event, context):
             body = json.loads(event.get("body", "{}"))
             body["file_url"] = "no-file-uploaded"
         else:
-            return make_response(400, {"error": "Unsupported Content-Type"})
+            return format_response(400, message="Unsupported Content-Type")
 
         # Validate required fields
         required_fields = [
-            "reference_id", "company_name", "tin", "invoice_number", "transaction_date",
-            "items", "encoder", "payee", "payee_account", "approver"
+            "reference_id", "company_name", "tin", "invoice_number",
+            "transaction_date", "items", "encoder", "payee",
+            "payee_account", "approver"
         ]
-        for field in required_fields:
-            if field not in body:
-                return make_response(400, {"error": f"Missing field: {field}"})
+        missing_fields = [f for f in required_fields if f not in body]
+        if missing_fields:
+            return format_response(400, message="Validation Error", errors={"missing_fields": missing_fields})
 
         # Validate employees
         encoder = get_employee(body["encoder"])
@@ -42,26 +47,27 @@ def lambda_handler(event, context):
         approver = get_employee(body["approver"])
 
         if not encoder:
-            return make_response(400, {"error": f"Encoder {body['encoder']} not found"})
+            return format_response(400, message="Validation Error", errors={"encoder": f"{body['encoder']} not found"})
         if not payee:
-            return make_response(400, {"error": f"Payee {body['payee']} not found"})
+            return format_response(400, message="Validation Error", errors={"payee": f"{body['payee']} not found"})
         if not approver:
-            return make_response(400, {"error": f"Approver {body['approver']} not found"})
+            return format_response(400, message="Validation Error", errors={"approver": f"{body['approver']} not found"})
         if not approver.get("is_approver", False):
-            return make_response(400, {"error": "Selected approver is not marked as approver"})
+            return format_response(400, message="Validation Error", errors={"approver": "Selected approver is not marked as approver"})
 
         # Validate invoice items
         items = json.loads(body["items"]) if isinstance(body["items"], str) else body["items"]
-        for item in items:
-            for f in ["id", "particulars", "project_class", "account", "vatable", "amount"]:
-                if f not in item:
-                    return make_response(400, {"error": f"Missing item field: {f}"})
+        for idx, item in enumerate(items):
+            missing_item_fields = [f for f in ["id", "particulars", "project_class", "account", "vatable", "amount"] if f not in item]
+            if missing_item_fields:
+                return format_response(400, message="Validation Error", errors={f"item_{idx}": f"Missing fields: {missing_item_fields}"})
 
         # Check for existing invoice
         existing = INVOICE_TABLE.get_item(Key={"reference_id": body["reference_id"]})
         if "Item" in existing:
-            return make_response(409, {"error": "Invoice already exists"})
+            return format_response(409, message="Invoice already exists")
 
+        # Prepare invoice data
         invoice_data = {
             "reference_id": body["reference_id"],
             "company_name": body["company_name"],
@@ -79,7 +85,7 @@ def lambda_handler(event, context):
         }
 
         INVOICE_TABLE.put_item(Item=invoice_data)
-        return make_response(201, {"message": "Invoice created", "data": invoice_data})
+        return format_response(201, message="Invoice created successfully", data=invoice_data)
 
     except Exception as e:
-        return make_response(500, {"error": str(e)})
+        return format_response(500, message="Internal Server Error", errors={"exception": str(e)})

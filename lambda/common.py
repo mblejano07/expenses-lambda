@@ -54,7 +54,7 @@ REFRESH_TOKENS_TABLE = DYNAMODB.Table("RefreshTokens")  # Requires SAM resource
 # SES CLIENT
 # =========================================================
 EMAIL_SOURCE = os.getenv("EMAIL_SOURCE", "noreply@example.com")
-SES_MOCK_MODE = os.getenv("SES_MOCK_MODE", "true").lower() == "true"
+SES_MOCK_MODE = True
 SES_ENDPOINT_URL = os.getenv("SES_ENDPOINT_URL", None)
 
 if SES_MOCK_MODE:
@@ -71,6 +71,26 @@ else:
 # =========================================================
 # RESPONSES & UTILS
 # =========================================================
+def format_response(status_code, message=None, data=None, errors=None):
+    """
+    Standardized REST API JSON response for Lambda functions.
+    
+    Args:
+        status_code (int): HTTP status code.
+        message (str, optional): Human-readable message.
+        data (dict/list, optional): Success payload.
+        errors (dict, optional): Error details.
+        
+    Returns:
+        dict: Formatted API Gateway Lambda Proxy response.
+    """
+    return make_response(status_code, {
+        "success": 200 <= status_code < 300,
+        "status": status_code,
+        "message": message,
+        "data": data,
+        "errors": errors
+    })
 def make_response(status_code, body, headers=None):
     """Standard API Gateway Lambda proxy response."""
     if headers is None:
