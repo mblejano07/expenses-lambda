@@ -20,6 +20,9 @@ Globals:
         JWT_SECRET: "local-secret"             # Prod: store in Secrets Manager
         INVOICES_TABLE_NAME: !Ref InvoicesTable
         EMPLOYEES_TABLE_NAME: !Ref EmployeesTable
+        ACCESS_TOKEN_TTL_SECONDS: "900"        # 15 minutes
+        REFRESH_TOKEN_TTL_SECONDS: "2592000"   # 30 days
+        REFRESH_TOKEN_PEPPER: "change-me"      # store in Secrets Manager in prod
 
 Resources:
 
@@ -135,6 +138,13 @@ Resources:
                 uri: !Sub 'arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${VerifyOtpFunction.Arn}/invocations'
                 passthroughBehavior: 'when_no_match'
               responses: {}
+          /auth/refresh:
+            post:
+              x-amazon-apigateway-integration:
+                type: 'aws_proxy'
+                httpMethod: 'POST'
+                uri: !Sub 'arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${RefreshTokenFunction.Arn}/invocations'
+              responses: {}
   
   # ================= Invoice Lambdas =================
 
@@ -222,8 +232,36 @@ Resources:
       Policies:
         - DynamoDBCrudPolicy:
             TableName: !Ref OtpTable
-
+  RefreshTokenFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: refresh_token.lambda_handler
+      CodeUri: lambda/
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref RefreshTokensTable
   # ================= DynamoDB for SCHEMAS =================
+  RefreshTokensTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: RefreshTokens
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: email
+          AttributeType: S
+        - AttributeName: token_id
+          AttributeType: S
+      KeySchema:
+        - AttributeName: email
+          KeyType: HASH
+        - AttributeName: token_id
+          KeyType: RANGE
+      TimeToLiveSpecification:
+        AttributeName: expires_at
+        Enabled: true
+    DeletionPolicy: Retain
+
+
   InvoicesTable:
     Type: AWS::DynamoDB::Table
     Properties:

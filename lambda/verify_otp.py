@@ -1,43 +1,45 @@
-import os
-import json
-import time
-import jwt  # you might need to add this to requirements.txt
-from common import make_response, DYNAMODB, OTP_TABLE
-from common import JWT_SECRET
+# verify_otp.py
+import json, time, hmac
+from common import make_response, OTP_TABLE, hash_otp, issue_tokens
 
 def lambda_handler(event, context):
     try:
         body = json.loads(event.get("body") or "{}")
-        email = body.get("email")
-        otp_code = body.get("otp_code")
+        email = (body.get("email") or "").strip().lower()
+        otp_code = (body.get("otp_code") or "").strip()
 
         if not email or not otp_code:
             return make_response(400, {"error": "Email and OTP code are required"})
 
-        response = OTP_TABLE.get_item(Key={"email": email})
-        item = response.get("Item")
-
+        resp = OTP_TABLE.get_item(Key={"email": email})
+        item = resp.get("Item")
         if not item:
             return make_response(400, {"error": "OTP not found or expired"})
 
-        if int(time.time()) > item.get("expires_at", 0):
+        if int(time.time()) > int(item.get("expires_at", 0)):
             return make_response(400, {"error": "OTP expired"})
 
-        if otp_code != item.get("otp_code"):
+        # verify hashed OTP
+        expected = hash_otp(otp_code, item["salt"])
+        if not hmac.compare_digest(expected, item["otp_hash"]):
             return make_response(400, {"error": "Invalid OTP code"})
 
-        # OTP is valid, generate JWT token for session
-        payload = {
-            "email": email,
-            "iat": int(time.time()),
-            "exp": int(time.time()) + 3600  # 1 hour expiry
-        }
-        token = jwt.encode(payload, JWT_SECRET, algorithm="HS256")
-
-        # Optionally: delete OTP after successful validation
+        # success: delete OTP and issue tokens
         OTP_TABLE.delete_item(Key={"email": email})
+        access_token, refresh_token, refresh_exp = issue_tokens(email)
 
-        return make_response(200, {"message": "OTP verified", "token": token})
+        # OPTIONAL: set refresh token as HttpOnly cookie (works with API GW + CORS config)
+        headers = {
+            "Content-Type": "application/json",
+            # Adjust cookie attributes for your domain/HTTPS
+            "Set-Cookie": f"refresh_token={refresh_token}; HttpOnly; Path=/; Max-Age=2592000; SameSite=Lax"
+        }
+        return make_response(200, {
+            "message": "OTP verified",
+            "access_token": access_token,
+            "refresh_token": refresh_token,  # also in cookie for SPA convenience
+            "refresh_expires_at": refresh_exp
+        }, headers=headers)
 
     except Exception as e:
         return make_response(500, {"error": str(e)})
