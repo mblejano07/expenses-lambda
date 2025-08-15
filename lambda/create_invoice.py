@@ -11,8 +11,10 @@ from common import (
 # This is the updated get_employee helper function to use email as the primary key.
 def get_employee(email):
     """Fetch employee details from DynamoDB using email as the primary key."""
+    if not email:
+        return None
     # Ensure the key is a dictionary with the primary key name
-    resp = EMPLOYEE_TABLE.get_item(Key={"email": email})
+    resp = EMPLOYEE_TABLE.get_item(Key={"email": email.lower()})
     return resp.get("Item")
 
 def lambda_handler(event, context):
@@ -104,16 +106,13 @@ def lambda_handler(event, context):
 
         encoder = get_employee(user_email)
         if not encoder:
-            return format_response(403, message="Employee record not found for the logged-in user")
+            # The correct way to include a variable for debugging
+            return format_response(403, message=f"Employee record not found for the logged-in user: {encoder}")
 
         payee_email = body.get("payee")
         approver_email = body.get("approver")
-
-        payee = get_employee(payee_email)
         approver = get_employee(approver_email)
 
-        if not payee:
-            return format_response(400, message="Validation Error", errors={"payee": f"Payee {payee_email} not found"})
         if not approver:
             return format_response(400, message="Validation Error", errors={"approver": f"Approver {approver_email} not found"})
 
@@ -151,7 +150,7 @@ def lambda_handler(event, context):
             "transaction_date": body["transaction_date"],
             "items": items,
             "encoder": encoder.get("email"),
-            "payee": payee.get("email"),
+            "payee": payee_email, # Directly use the email from the request body
             "payee_account": body["payee_account"],
             "approver": approver.get("email"),
             "file_url": body.get("file_url", "no-file-uploaded"),
@@ -165,3 +164,4 @@ def lambda_handler(event, context):
 
     except Exception as e:
         return format_response(500, message="Internal Server Error", errors={"exception": str(e)})
+
