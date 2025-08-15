@@ -157,7 +157,7 @@ def is_valid_workmail_user(email):
 # AUTH CONFIG (JWT + Refresh)
 # =========================================================
 JWT_SECRET = os.getenv("JWT_SECRET", "local-secret")  # 🔒 In prod: AWS Secrets Manager
-ACCESS_TOKEN_TTL_SECONDS = int(os.getenv("ACCESS_TOKEN_TTL_SECONDS", "900"))         # 15 min
+ACCESS_TOKEN_TTL_SECONDS = int(os.getenv("ACCESS_TOKEN_TTL_SECONDS", "86400"))         # 1 day
 REFRESH_TOKEN_TTL_SECONDS = int(os.getenv("REFRESH_TOKEN_TTL_SECONDS", "2592000"))   # 30 days
 REFRESH_TOKEN_PEPPER = os.getenv("REFRESH_TOKEN_PEPPER", "change-me")                # 🔒 Secrets Manager
 OTP_MAX_ATTEMPTS = int(os.getenv("OTP_MAX_ATTEMPTS", "5"))

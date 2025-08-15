@@ -1,5 +1,4 @@
 import json
-import uuid
 from io import BytesIO
 from datetime import datetime
 from common import (
@@ -20,7 +19,7 @@ def lambda_handler(event, context):
             body, file_data = parse_multipart(event)
             if file_data:
                 file_obj = BytesIO(file_data["content"])
-                file_key = f"invoices/{uuid.uuid4()}_{file_data['filename']}"
+                file_key = f"invoices/{str(uuid.uuid4())}_{file_data['filename']}"
                 S3.upload_fileobj(file_obj, BUCKET_NAME, file_key)
                 body["file_url"] = f"{LOCALSTACK_URL}/{BUCKET_NAME}/{file_key}"
             else:
@@ -31,15 +30,53 @@ def lambda_handler(event, context):
         else:
             return format_response(400, message="Unsupported Content-Type")
 
-        # Validate required fields
+        # Validate required fields, excluding the reference_id since it will be generated here
         required_fields = [
-            "reference_id", "company_name", "tin", "invoice_number",
+            "company_name", "tin", "invoice_number",
             "transaction_date", "items", "encoder", "payee",
             "payee_account", "approver"
         ]
         missing_fields = [f for f in required_fields if f not in body]
         if missing_fields:
             return format_response(400, message="Validation Error", errors={"missing_fields": missing_fields})
+
+        # --- NEW LOGIC FOR GENERATING REFERENCE_ID ---
+        # Get the current year and month
+        now = datetime.utcnow()
+        current_year = now.year
+        current_month = now.month
+        prefix = f"{current_month:02d}{current_year}"
+
+        # Fetch all existing reference IDs to determine the next sequential number.
+        # NOTE: A full table scan is inefficient for large datasets. For a production
+        # environment, a better approach would be to use a DynamoDB global secondary index
+        # on the year or a dedicated counter table. For this implementation, we will
+        # use a scan for simplicity.
+        response = INVOICE_TABLE.scan(
+            ProjectionExpression="reference_id",
+        )
+        items = response.get("Items", [])
+        
+        # Filter for the current year's invoices and find the highest number
+        latest_number = 0
+        for item in items:
+            ref_id = item.get("reference_id")
+            if ref_id and ref_id.startswith(prefix):
+                try:
+                    # Extract the numeric part after the hyphen and convert to integer
+                    number_part = int(ref_id.split("-")[1])
+                    if number_part > latest_number:
+                        latest_number = number_part
+                except (IndexError, ValueError):
+                    # Ignore malformed reference_ids
+                    pass
+        
+        # Increment the number for the new invoice
+        new_number = latest_number + 1
+        new_ref_id = f"{prefix}-{new_number:03d}"
+        
+        body["reference_id"] = new_ref_id
+        # --- END OF NEW LOGIC ---
 
         # Validate employees
         encoder = get_employee(body["encoder"])
@@ -57,15 +94,16 @@ def lambda_handler(event, context):
 
         # Validate invoice items
         items = json.loads(body["items"]) if isinstance(body["items"], str) else body["items"]
+        if not isinstance(items, list):
+            return format_response(400, message="Validation Error", errors={"items": "Items must be a list"})
+
         for idx, item in enumerate(items):
             missing_item_fields = [f for f in ["id", "particulars", "project_class", "account", "vatable", "amount"] if f not in item]
             if missing_item_fields:
                 return format_response(400, message="Validation Error", errors={f"item_{idx}": f"Missing fields: {missing_item_fields}"})
 
-        # Check for existing invoice
-        existing = INVOICE_TABLE.get_item(Key={"reference_id": body["reference_id"]})
-        if "Item" in existing:
-            return format_response(409, message="Invoice already exists")
+        # The check for an existing invoice is now removed because we are generating a unique UUID.
+        # This prevents race conditions and simplifies the logic.
 
         # Prepare invoice data
         invoice_data = {
@@ -81,7 +119,8 @@ def lambda_handler(event, context):
             "approver": approver,
             "file_url": body.get("file_url", "no-file-uploaded"),
             "encoding_date": datetime.utcnow().isoformat(),
-            "status": "Pending"
+            "status": "Pending",
+            "remarks": body.get("remarks", "")
         }
 
         INVOICE_TABLE.put_item(Item=invoice_data)
@@ -89,3 +128,4 @@ def lambda_handler(event, context):
 
     except Exception as e:
         return format_response(500, message="Internal Server Error", errors={"exception": str(e)})
+

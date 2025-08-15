@@ -78,7 +78,14 @@ def lambda_handler(event, context):
         if os.environ.get("WORKMAIL_ORGANIZATION_ID") == "local-dev":
             item["otp_code"] = otp_code
 
-        OTP_TABLE.put_item(Item=item)
+        try:
+            print("Putting item to DynamoDB:", item)
+            OTP_TABLE.put_item(Item=item)
+        except Exception as e:
+            print("DynamoDB put_item failed:", e)
+            raise
+
+        # OTP_TABLE.put_item(Item=item)
 
         # ✅ Send OTP
         send_otp_email(email, otp_code)
