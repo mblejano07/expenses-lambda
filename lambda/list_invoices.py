@@ -29,6 +29,7 @@ def lambda_handler(event, context):
     Query parameters:
         - limit (optional): max number of items per page (default: 10)
         - last_evaluated_key (optional): JSON-encoded key from previous page
+        - search (optional): A reference_id to search for.
     """
     # 1. Verify JWT and get user email
     payload, error = verify_jwt_from_event(event)
@@ -39,56 +40,72 @@ def lambda_handler(event, context):
     if not user_email:
         return format_response(401, message="Missing email in token payload")
 
-    # 2. Fetch the employee record to check their role
-    try:
-        employee_response = EMPLOYEE_TABLE.get_item(Key={"email": user_email.lower()})
-        employee = employee_response.get("Item")
-        
-        if not employee:
-            return format_response(403, message="Employee record not found for user: " + user_email)
-        
-        # Ensure the access_role is a list for easy checking
-        access_role = employee.get("access_role", [])
-        if isinstance(access_role, set):
-            access_role = list(access_role)
+    # 2. Get query parameters and check for a search term
+    query_params = event.get("queryStringParameters", {}) or {}
+    search_term = query_params.get("search")
+    
+    # 3. Fetch the employee record to check their role (if a full list is needed)
+    is_admin_or_approver = False
+    if not search_term:
+        try:
+            employee_response = EMPLOYEE_TABLE.get_item(Key={"email": user_email.lower()})
+            employee = employee_response.get("Item")
             
-        is_admin_or_approver = "admin" in access_role or "approver" in access_role
-        
-        # Use the employee's email to filter invoices for standard users
-        user_employee_email = employee.get("email")
-        if not user_employee_email:
-             return format_response(403, message="Employee email not available for filtering")
+            if not employee:
+                return format_response(403, message="Employee record not found for user: " + user_email)
+            
+            # Ensure the access_role is a list for easy checking
+            access_role = employee.get("access_role", [])
+            if isinstance(access_role, set):
+                access_role = list(access_role)
+                
+            is_admin_or_approver = "admin" in access_role or "approver" in access_role
+            
+            user_employee_email = employee.get("email")
+            if not user_employee_email:
+                 return format_response(403, message="Employee email not available for filtering")
 
-    except Exception as e:
-        return format_response(500, message="Error fetching user's employee record", errors={"exception": str(e)})
-
+        except Exception as e:
+            return format_response(500, message="Error fetching user's employee record", errors={"exception": str(e)})
 
     try:
-        query_params = event.get("queryStringParameters", {}) or {}
-        limit = int(query_params.get("limit", 10))
+        invoices_raw = []
+        last_evaluated_key = None
 
-        scan_kwargs = {"Limit": limit}
-        last_key_raw = query_params.get("last_evaluated_key")
-        if last_key_raw:
-            try:
-                scan_kwargs["ExclusiveStartKey"] = json.loads(last_key_raw)
-            except json.JSONDecodeError:
-                return format_response(400, message="Invalid 'last_evaluated_key' format")
+        # Handle search functionality using get_item for scalability
+        if search_term:
+            # If a search term is present, perform a fast GetItem on the primary key.
+            response = INVOICE_TABLE.get_item(Key={"reference_id": search_term})
+            item = response.get("Item")
+            if item:
+                # Add the single found item to the list
+                invoices_raw.append(item)
+        else:
+            # If no search term, proceed with the paginated scan
+            limit = int(query_params.get("limit", 10))
+            scan_kwargs = {"Limit": limit}
+            last_key_raw = query_params.get("last_evaluated_key")
+            if last_key_raw:
+                try:
+                    scan_kwargs["ExclusiveStartKey"] = json.loads(last_key_raw)
+                except json.JSONDecodeError:
+                    return format_response(400, message="Invalid 'last_evaluated_key' format")
+            
+            # Apply a filter expression for non-admin/approver users
+            if not is_admin_or_approver:
+                scan_kwargs["FilterExpression"] = Attr('encoder').eq(user_employee_email)
 
-        # 3. Apply a filter expression for non-admin/approver users
-        # This is the key part of the logic. If the user is NOT an admin or approver,
-        # we filter the list to only show their encoded invoices.
-        if not is_admin_or_approver:
-            scan_kwargs["FilterExpression"] = Attr('encoder').eq(user_employee_email)
+            # Perform scan
+            response = INVOICE_TABLE.scan(**scan_kwargs)
+            invoices_raw = response.get("Items", [])
+            last_evaluated_key = response.get("LastEvaluatedKey")
 
-        # 4. Perform scan
-        response = INVOICE_TABLE.scan(**scan_kwargs)
-        invoices_raw = [decimal_to_float(item) for item in response.get("Items", [])]
-
-        # 5. Enrich the invoice data with full employee details for display
+        # 4. Enrich the invoice data with full employee details for display
         invoices_with_details = []
         for invoice in invoices_raw:
-            # Re-check the access_role for each employee object to ensure it's a list
+            # Convert Decimal objects to floats for JSON serialization
+            invoice = decimal_to_float(invoice)
+            
             # Look up the full employee object for the encoder
             encoder_data = invoice.get("encoder")
             if isinstance(encoder_data, str):
@@ -126,8 +143,8 @@ def lambda_handler(event, context):
             "last_evaluated_key": None
         }
 
-        if "LastEvaluatedKey" in response:
-            last_eval_key = decimal_to_float(response["LastEvaluatedKey"])
+        if last_evaluated_key:
+            last_eval_key = decimal_to_float(last_evaluated_key)
             result["last_evaluated_key"] = json.dumps(last_eval_key)
 
         return format_response(
