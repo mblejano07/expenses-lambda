@@ -113,9 +113,9 @@ def decimal_to_float(obj):
         return float(obj)
     return obj
 
-def get_employee(employee_id):
+def get_employee(email):
     """Fetch employee details from DynamoDB."""
-    resp = EMPLOYEE_TABLE.get_item(Key={"employee_id": employee_id})
+    resp = EMPLOYEE_TABLE.get_item(Key={"email": email})
     return resp.get("Item")
 
 def parse_multipart(event):

@@ -6,24 +6,26 @@ def lambda_handler(event, context):
     Lambda function to list all employees from the DynamoDB table.
     """
     # Verify the JWT token to ensure the user is authenticated.
-    # This assumes a successful login and token is sent in the header.
     payload, error = verify_jwt_from_event(event)
     if error:
         return format_response(401, message="Unauthorized", errors={"auth": error})
 
     try:
-        # Scan the table to get all items. For a large number of employees,
-        # you might want to consider pagination, but for this use case,
-        # a simple scan is sufficient.
+        # Perform a scan to get all items. Note: for very large tables,
+        # a query with pagination is more efficient and cost-effective.
         response = EMPLOYEE_TABLE.scan()
         employees = response.get('Items', [])
 
-        # The 'approver' flag is stored as a string or number, so
-        # we'll convert it to a boolean to make it easier for the frontend.
+        # Process each employee item to handle data types.
         for employee in employees:
-            if 'is_approver' in employee:
-                employee['is_approver'] = bool(employee['is_approver'])
-
+            # DynamoDB's String Set (SS) is returned as a Python 'set' object,
+            # which is not JSON serializable. We must convert it to a list.
+            if 'access_role' in employee:
+                employee['access_role'] = list(employee['access_role'])
+            
+            # The is_approver logic is no longer needed, as the 'access_role'
+            # attribute is the single source of truth for an employee's roles.
+            # The frontend can check for the presence of the 'approver' role.
         return format_response(
             200,
             message="Employees fetched successfully",
@@ -39,4 +41,3 @@ def lambda_handler(event, context):
             message="An unexpected error occurred",
             errors={"internal": str(e)}
         )
-

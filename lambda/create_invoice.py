@@ -1,122 +1,159 @@
 import json
+import uuid
 from io import BytesIO
 from datetime import datetime
+from boto3.dynamodb.conditions import Key
 from common import (
-    make_response, S3, BUCKET_NAME, INVOICE_TABLE, get_employee,
-    parse_multipart, LOCALSTACK_URL, verify_jwt_from_event, format_response
+    S3, BUCKET_NAME, INVOICE_TABLE,
+    parse_multipart, LOCALSTACK_URL, verify_jwt_from_event, format_response, EMPLOYEE_TABLE
 )
 
+# This is the updated get_employee helper function to use email as the primary key.
+def get_employee(email):
+    """Fetch employee details from DynamoDB using email as the primary key."""
+    # Ensure the key is a dictionary with the primary key name
+    resp = EMPLOYEE_TABLE.get_item(Key={"email": email})
+    return resp.get("Item")
+
 def lambda_handler(event, context):
+    """
+    Lambda function to create a new invoice record, handling both
+    multipart/form-data and application/json requests.
+    """
     payload, error = verify_jwt_from_event(event)
     if error:
         return format_response(401, message="Unauthorized", errors={"auth": error})
 
     try:
-        headers = event.get("headers", {})
-        content_type = headers.get("Content-Type") or headers.get("content-type", "")
+        req_headers = event.get("headers", {})
+        content_type = req_headers.get("Content-Type") or req_headers.get("content-type", "")
+
+        body = {}
+        file_data = None
+        body_from_event = event.get("body", "")
+
+        # Check for an empty request body early to prevent parsing errors
+        if not body_from_event:
+            return format_response(400, message="Bad Request", errors={"body": "Request body is empty."})
 
         if content_type.startswith("multipart/form-data"):
-            body, file_data = parse_multipart(event)
-            if file_data:
-                file_obj = BytesIO(file_data["content"])
-                file_key = f"invoices/{str(uuid.uuid4())}_{file_data['filename']}"
-                S3.upload_fileobj(file_obj, BUCKET_NAME, file_key)
-                body["file_url"] = f"{LOCALSTACK_URL}/{BUCKET_NAME}/{file_key}"
-            else:
-                body["file_url"] = "no-file-uploaded"
+            form_data_parts, file_data = parse_multipart(event)
+            try:
+                # Get the JSON string from the 'body' part and default to an empty JSON object if not found
+                json_payload_str = form_data_parts.get("body", "{}")
+                body = json.loads(json_payload_str)
+            except json.JSONDecodeError as e:
+                return format_response(400, message="Validation Error", errors={"body": f"Failed to parse JSON body from multipart form: {str(e)}"})
         elif content_type.startswith("application/json"):
-            body = json.loads(event.get("body", "{}"))
-            body["file_url"] = "no-file-uploaded"
+            try:
+                body = json.loads(body_from_event)
+            except json.JSONDecodeError as e:
+                return format_response(400, message="Bad Request", errors={"body": "Failed to parse JSON from request body: " + str(e)})
         else:
             return format_response(400, message="Unsupported Content-Type")
 
-        # Validate required fields, excluding the reference_id since it will be generated here
+        if file_data:
+            file_obj = BytesIO(file_data["content"])
+            file_key = f"invoices/{str(uuid.uuid4())}_{file_data['filename']}"
+            S3.upload_fileobj(file_obj, BUCKET_NAME, file_key)
+            body["file_url"] = f"{LOCALSTACK_URL}/{BUCKET_NAME}/{file_key}"
+        else:
+            body["file_url"] = "no-file-uploaded"
+
+        # Validate required fields
         required_fields = [
             "company_name", "tin", "invoice_number",
-            "transaction_date", "items", "encoder", "payee",
+            "transaction_date", "items", "payee",
             "payee_account", "approver"
         ]
         missing_fields = [f for f in required_fields if f not in body]
         if missing_fields:
             return format_response(400, message="Validation Error", errors={"missing_fields": missing_fields})
 
-        # --- NEW LOGIC FOR GENERATING REFERENCE_ID ---
-        # Get the current year and month
+        # --- LOGIC FOR GENERATING REFERENCE_ID ---
         now = datetime.utcnow()
         current_year = now.year
         current_month = now.month
         prefix = f"{current_month:02d}{current_year}"
 
-        # Fetch all existing reference IDs to determine the next sequential number.
-        # NOTE: A full table scan is inefficient for large datasets. For a production
-        # environment, a better approach would be to use a DynamoDB global secondary index
-        # on the year or a dedicated counter table. For this implementation, we will
-        # use a scan for simplicity.
         response = INVOICE_TABLE.scan(
             ProjectionExpression="reference_id",
         )
         items = response.get("Items", [])
-        
-        # Filter for the current year's invoices and find the highest number
+
         latest_number = 0
         for item in items:
             ref_id = item.get("reference_id")
             if ref_id and ref_id.startswith(prefix):
                 try:
-                    # Extract the numeric part after the hyphen and convert to integer
                     number_part = int(ref_id.split("-")[1])
                     if number_part > latest_number:
                         latest_number = number_part
                 except (IndexError, ValueError):
-                    # Ignore malformed reference_ids
                     pass
-        
-        # Increment the number for the new invoice
+
         new_number = latest_number + 1
         new_ref_id = f"{prefix}-{new_number:03d}"
-        
+
         body["reference_id"] = new_ref_id
-        # --- END OF NEW LOGIC ---
+        # --- END OF LOGIC ---
 
-        # Validate employees
-        encoder = get_employee(body["encoder"])
-        payee = get_employee(body["payee"])
-        approver = get_employee(body["approver"])
+        user_email = payload.get("email")
+        if not user_email:
+            return format_response(401, message="Missing email in token payload")
 
+        encoder = get_employee(user_email)
         if not encoder:
-            return format_response(400, message="Validation Error", errors={"encoder": f"{body['encoder']} not found"})
-        if not payee:
-            return format_response(400, message="Validation Error", errors={"payee": f"{body['payee']} not found"})
-        if not approver:
-            return format_response(400, message="Validation Error", errors={"approver": f"{body['approver']} not found"})
-        if not approver.get("is_approver", False):
-            return format_response(400, message="Validation Error", errors={"approver": "Selected approver is not marked as approver"})
+            return format_response(403, message="Employee record not found for the logged-in user")
 
-        # Validate invoice items
-        items = json.loads(body["items"]) if isinstance(body["items"], str) else body["items"]
+        payee_email = body.get("payee")
+        approver_email = body.get("approver")
+
+        payee = get_employee(payee_email)
+        approver = get_employee(approver_email)
+
+        if not payee:
+            return format_response(400, message="Validation Error", errors={"payee": f"Payee {payee_email} not found"})
+        if not approver:
+            return format_response(400, message="Validation Error", errors={"approver": f"Approver {approver_email} not found"})
+
+        # Get the access_role, which is a DynamoDB Set, and convert it to a Python list
+        approver_roles = list(approver.get("access_role", set()))
+
+        if "approver" not in approver_roles:
+            return format_response(400, message="Validation Error", errors={"approver": f"Selected approver is not marked as an approver. Roles found: {approver_roles}"})
+
+        items_raw = body.get("items")
+        if not items_raw:
+             return format_response(400, message="Validation Error", errors={"items": "Items field is missing or empty."})
+
+        if isinstance(items_raw, str):
+            try:
+                items = json.loads(items_raw)
+            except json.JSONDecodeError as e:
+                return format_response(400, message="Validation Error", errors={"items": f"Failed to parse items JSON: {str(e)}"})
+        else:
+            items = items_raw
+
         if not isinstance(items, list):
             return format_response(400, message="Validation Error", errors={"items": "Items must be a list"})
 
         for idx, item in enumerate(items):
-            missing_item_fields = [f for f in ["id", "particulars", "project_class", "account", "vatable", "amount"] if f not in item]
+            missing_item_fields = [f for f in ["particulars", "project_class", "account", "vatable", "amount"] if f not in item]
             if missing_item_fields:
                 return format_response(400, message="Validation Error", errors={f"item_{idx}": f"Missing fields: {missing_item_fields}"})
 
-        # The check for an existing invoice is now removed because we are generating a unique UUID.
-        # This prevents race conditions and simplifies the logic.
-
-        # Prepare invoice data
         invoice_data = {
-            "reference_id": body["reference_id"],
+            "reference_id": new_ref_id,
             "company_name": body["company_name"],
             "tin": body["tin"],
             "invoice_number": body["invoice_number"],
             "transaction_date": body["transaction_date"],
             "items": items,
-            "encoder": encoder,
-            "payee": payee,
+            "encoder": encoder.get("email"),
+            "payee": payee.get("email"),
             "payee_account": body["payee_account"],
-            "approver": approver,
+            "approver": approver.get("email"),
             "file_url": body.get("file_url", "no-file-uploaded"),
             "encoding_date": datetime.utcnow().isoformat(),
             "status": "Pending",
@@ -128,4 +165,3 @@ def lambda_handler(event, context):
 
     except Exception as e:
         return format_response(500, message="Internal Server Error", errors={"exception": str(e)})
-
