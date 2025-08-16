@@ -27,7 +27,6 @@ Globals:
       AllowOrigin: "'*'"
 
 Resources:
-
   InvoiceApi:
     Type: AWS::Serverless::Api
     Properties:
@@ -43,6 +42,24 @@ Resources:
           - 'application/octet-stream'
         paths:
           /invoices:
+            # === ADD THIS OPTIONS BLOCK ===
+            options:
+              x-amazon-apigateway-integration:
+                type: 'mock'
+                requestTemplates:
+                  application/json: '{"statusCode": 200}'
+                passthroughBehavior: 'when_no_match'
+              responses:
+                '200':
+                  headers:
+                    Access-Control-Allow-Origin:
+                      type: 'string'
+                    Access-Control-Allow-Methods:
+                      type: 'string'
+                    Access-Control-Allow-Headers:
+                      type: 'string'
+                  schema: {}
+            # ===============================
             post:
               x-amazon-apigateway-integration:
                 type: 'aws_proxy'

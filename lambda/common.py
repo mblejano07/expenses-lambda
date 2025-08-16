@@ -182,6 +182,13 @@ def issue_tokens(email: str):
     Returns: (access_token, refresh_token_combined, refresh_expires_at)
     """
     now = int(time.time())
+    
+    # === START: ADDED CODE ===
+    # Fetch the employee data to get the role
+    employee = get_employee(email)
+    # The role should be a string, default to "user" if not found
+    role = employee.get("role", "user") if employee else "user"
+    # === END: ADDED CODE ===
 
     # Access token (JWT)
     access_payload = {
@@ -189,6 +196,9 @@ def issue_tokens(email: str):
         "type": "access",
         "iat": now,
         "exp": now + ACCESS_TOKEN_TTL_SECONDS,
+        # === START: ADDED CODE ===
+        "role": role,
+        # === END: ADDED CODE ===
     }
     access_token = jwt.encode(access_payload, JWT_SECRET, algorithm="HS256")
 
