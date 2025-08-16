@@ -20,27 +20,40 @@ def lambda_handler(event, context):
         except json.JSONDecodeError:
             return format_response(400, message="Invalid JSON body")
 
-        allowed_fields = ["company_name", "tin", "transaction_date", "items"]
+        # The 'status' field has been added to the allowed_fields list.
+        allowed_fields = ["company_name", "tin", "transaction_date", "items", "status"]
 
         existing = INVOICE_TABLE.get_item(Key={"reference_id": reference_id})
         if "Item" not in existing:
             return format_response(404, message="Invoice not found")
+
+        # Before updating, check if the status is allowed to be changed from "Pending"
+        if "status" in body and existing["Item"]["status"] != "Pending":
+            return format_response(409, message="Cannot update status of a non-pending invoice")
 
         update_expr = []
         expr_attr_values = {}
 
         for field in allowed_fields:
             if field in body:
-                update_expr.append(f"{field} = :{field}")
+                update_expr.append(f"#{field} = :{field}")
                 expr_attr_values[f":{field}"] = body[field]
 
         if not update_expr:
             return format_response(400, message="No valid fields to update")
 
+        # Add a placeholder for a new field name and value for the status attribute
+        # to avoid conflicts with DynamoDB reserved keywords.
+        expression_attribute_names = {}
+        for field in body.keys():
+            if field in allowed_fields:
+                expression_attribute_names[f"#{field}"] = field
+                
         INVOICE_TABLE.update_item(
             Key={"reference_id": reference_id},
             UpdateExpression="SET " + ", ".join(update_expr),
-            ExpressionAttributeValues=expr_attr_values
+            ExpressionAttributeValues=expr_attr_values,
+            ExpressionAttributeNames=expression_attribute_names
         )
 
         return format_response(
@@ -50,6 +63,7 @@ def lambda_handler(event, context):
         )
 
     except Exception as e:
+        print(f"Error updating invoice: {e}")
         return format_response(
             500,
             message="Internal Server Error",
