@@ -1,6 +1,7 @@
 import json
 from common import format_response, INVOICE_TABLE, decimal_to_float, verify_jwt_from_event, EMPLOYEE_TABLE
 from boto3.dynamodb.conditions import Attr
+from operator import itemgetter, attrgetter
 
 def get_employee_by_email(email):
     """
@@ -21,7 +22,7 @@ def get_employee_by_email(email):
 def lambda_handler(event, context):
     """
     Lambda function to fetch paginated invoice records from DynamoDB,
-    with dynamic access control based on the user's role.
+    with dynamic access control based on the user's role and added sorting functionality.
 
     - Admin and Approver users can see all invoices.
     - Standard users can only see invoices they have encoded.
@@ -30,6 +31,8 @@ def lambda_handler(event, context):
         - limit (optional): max number of items per page (default: 10)
         - last_evaluated_key (optional): JSON-encoded key from previous page
         - search (optional): A reference_id to search for.
+        - sort_by (optional): The invoice field to sort by (e.g., 'transaction_date', 'status').
+        - sort_order (optional): 'asc' for ascending or 'desc' for descending. Defaults to 'desc'.
     """
     # 1. Verify JWT and get user email
     payload, error = verify_jwt_from_event(event)
@@ -43,6 +46,10 @@ def lambda_handler(event, context):
     # 2. Get query parameters and check for a search term
     query_params = event.get("queryStringParameters", {}) or {}
     search_term = query_params.get("search")
+    
+    # Get sorting parameters
+    sort_by = query_params.get("sort_by")
+    sort_order = query_params.get("sort_order", "desc")
     
     # 3. Fetch the employee record to check their role (if a full list is needed)
     is_admin_or_approver = False
@@ -137,6 +144,17 @@ def lambda_handler(event, context):
                 invoice["approver"] = approver_data or {"email": "Unknown", "first_name": "Unknown", "last_name": "User"}
 
             invoices_with_details.append(invoice)
+
+        # Apply sorting to the final list of invoices
+        if sort_by and len(invoices_with_details) > 1:
+            reverse = sort_order.lower() == "desc"
+            try:
+                # Use a lambda function to safely access the sort key, providing a default value if missing
+                # This works for 'reference_id' and other string/numeric fields
+                invoices_with_details.sort(key=lambda x: x.get(sort_by, ""), reverse=reverse)
+            except Exception as sort_error:
+                # Log the error but continue without sorting to not fail the request
+                print(f"Sorting failed on key '{sort_by}': {sort_error}")
 
         result = {
             "invoices": invoices_with_details,

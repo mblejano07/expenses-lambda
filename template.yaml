@@ -20,6 +20,7 @@ Globals:
         JWT_SECRET: "local-secret"             # Prod: store in Secrets Manager
         INVOICES_TABLE_NAME: !Ref InvoicesTable
         EMPLOYEES_TABLE_NAME: !Ref EmployeesTable
+        ACCOUNTS_TABLE_NAME: !Ref AccountsTable
   Api:
     Cors:
       # === THIS LINE HAS BEEN UPDATED TO INCLUDE PATCH ===
@@ -168,6 +169,30 @@ Resources:
                 passthroughBehavior: when_no_match
               security:
                 - api_key: []
+          /accounts:
+            options:
+              x-amazon-apigateway-integration:
+                type: 'mock'
+                requestTemplates:
+                  application/json: '{"statusCode": 200}'
+                passthroughBehavior: 'when_no_match'
+              responses:
+                '200':
+                  headers:
+                    Access-Control-Allow-Origin:
+                      type: 'string'
+                    Access-Control-Allow-Methods:
+                      type: 'string'
+                    Access-Control-Allow-Headers:
+                      type: 'string'
+                  schema: {}
+            get:
+              x-amazon-apigateway-integration:
+                type: 'aws_proxy'
+                httpMethod: 'POST'
+                uri: !Sub 'arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${GetAccountsFunction.Arn}/invocations'
+                passthroughBehavior: 'when_no_match'
+              responses: {}
   
   # ================= Invoice Lambdas =================
 
@@ -240,6 +265,14 @@ Resources:
       Handler: list_employees.lambda_handler
       Policies:
         - DynamoDBReadAccess
+  GetAccountsFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: get_accounts.lambda_handler
+      CodeUri: lambda/
+      Policies:
+        - DynamoDBReadPolicy:
+            TableName: !Ref AccountsTable
   # ================= OTP Auth Lambdas =================
 
   RequestOtpFunction:
@@ -303,7 +336,20 @@ Resources:
       TimeToLiveSpecification:
         AttributeName: expires_at
         Enabled: true
-      DeletionPolicy: Retain  # Keep table if it already exists
+    DeletionPolicy: Retain  # Keep table if it already exists
+  # Add this new DynamoDB table under the DynamoDB for SCHEMAS section.
+  AccountsTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: Accounts
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: account_name
+          AttributeType: S
+      KeySchema:
+        - AttributeName: account_name
+          KeyType: HASH
+    DeletionPolicy: Retain
 
   # ================= SES Identity (Prod Only) =================
 
