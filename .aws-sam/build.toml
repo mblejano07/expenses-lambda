@@ -7,6 +7,6 @@ architecture = "x86_64"
 handler = "create_invoice.lambda_handler"
 manifest_hash = "b17a9a465ac31865052cc3661a8bf975"
 packagetype = "Zip"
-functions = ["CreateInvoiceFunction", "ListInvoicesFunction", "GetInvoiceFunction", "UpdateInvoiceFunction", "DeleteInvoiceFunction", "AddItemFunction", "DeleteItemFunction", "ListEmployeesFunction", "RequestOtpFunction", "VerifyOtpFunction"]
+functions = ["CreateInvoiceFunction", "ListInvoicesFunction", "GetInvoiceFunction", "UpdateInvoiceFunction", "DeleteInvoiceFunction", "AddItemFunction", "DeleteItemFunction", "ListEmployeesFunction", "GetAccountsFunction", "RequestOtpFunction", "VerifyOtpFunction"]
 
 [layer_build_definitions]
